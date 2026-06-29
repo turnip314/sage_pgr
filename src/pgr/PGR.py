@@ -406,7 +406,7 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
         # Convert shape param to kronecker
         debug("ITER:", kappa, verbosity=10)
         kronecker_param = to_kronecker(P, shape_param, params, u_, prec)
-        debug("TO KRONECKER, verbosity=10)
+        debug("TO KRONECKER", verbosity=10)
         debug(P, verbosity=10)
         debug(kronecker_param, verbosity=10)
         debug(verbosity=10)
