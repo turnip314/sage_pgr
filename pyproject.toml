@@ -1,5 +1,5 @@
 [project]
-name = "pgr"
+name = "sage_pgr"
 version = "0.1.0"
 description = "Parametric Geometric Resolutions"
 authors = [
