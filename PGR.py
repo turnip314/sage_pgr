@@ -266,25 +266,29 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
     debug("sys:", sys)
     #debug("JacF_det:", JacF.change_ring(Quo_k_P).determinant())
 
-    JacF_inv = JacF.inverse()
-    JacF_inv = matrix(
-        [
-            [f.numerator() * inv(f.denominator(), P) for f in row]
-            for row in JacF_inv
-        ]
-    )
-    debug("JacF_inv")
-    debug(JacF_inv)
+    #JacF_inv = JacF.inverse()
+    #JacF_inv = matrix(
+    #    [
+    #        [f.numerator() * inv(f.denominator(), P) for f in row]
+    #        for row in JacF_inv
+    #    ]
+    #)
+    #debug("JacF_inv")
+    #debug(JacF_inv)
 
     # 4. Compute the iteration matrix M
-    M = JacT * JacF_inv
+    #M = JacT * JacF_inv
 
     # 5. Evaluate the defect (sys) at X = V(U) to retain terms up to O(params^{2*prec})
     sys_eval = vector([f.subs(Tsubs) for f in sys])
+    JacF_inv_times_sys_eval = JacF.solve_right(sys_eval)
+    JacF_inv_times_sys_eval = vector(
+            [f.numerator() * inv(f.denominator(), P) for f in JacF_inv_times_sys_eval]
+    )
     debug("eval:", sys_eval)
 
     # 6. Multiply M by the defect and reduce modulo P and params^{2*prec}
-    deltas = M * sys_eval
+    deltas = JacT * JacF_inv_times_sys_eval #M * sys_eval
     debug("deltas:", deltas)
     deltas = [mod_truncate(d, P, params, 2*prec) for d in deltas]
     debug("P:", P)
