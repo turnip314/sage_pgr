@@ -1,7 +1,7 @@
 from sage.all import QQ, QQbar, log, Ideal, PolynomialRing, xgcd, FractionField, matrix, SR, vector, PowerSeriesRing, TermOrder
 
 def debug(*args, verbosity=1):
-    threshold = 2
+    threshold = 9
     if verbosity > threshold:
         print(*args)
 
@@ -14,15 +14,82 @@ def jacobian(sys, vs):
         )
 
 def truncate_coeffs(f, params, degree):
+    R_base_poly = params[0].numerator().parent()
+    Quo_r = R_base_poly.quotient_ring(Ideal([R_base_poly(v) for v in params])**degree)
     return sum(
-        [c*v for c, v in f if sum(v.degree(p) for p in params) < degree]
+        [(Quo_r(c.numerator())*Quo_r(c.denominator()).inverse()).lift()*v for c, v in f]
     )
 
-def mod_by_P(f, P, u_=None):
-    return f % P
+######## IMPLEMENTATION BY GEMINI - FOR TESTING
 
-def solve_right(A, b, P, prec):
-    pass
+def truncate_base_poly(poly, params, max_degree):
+    """Safely drops terms from a base polynomial exceeding max_degree."""
+    if not poly: 
+        return poly
+    
+    R_base = poly.parent()
+    R = PolynomialRing(QQ, len(poly.parent().gens()), list(poly.parent().gens()))
+    poly, params = apply_ring_morphism(R, poly, params)
+    res = R(0)
+    for c, v in poly:
+        # exps is a tuple of degrees for each parameter
+        if v.degree() < max_degree:
+            res += c*v
+    
+    return R_base(res)
+
+def expand_fraction(frac, params, max_degree):
+    """Computes the Taylor expansion of N/D up to max_degree."""
+    R_base = params[0].parent()
+    num = R_base(frac.numerator())
+    den = R_base(frac.denominator())
+    
+    # 1. Evaluate the denominator at the origin (params = 0)
+    d0_val = den.subs({p: 0 for p in params})
+    if d0_val == 0:
+        raise ValueError("Division by zero: Denominator vanishes at expansion point.")
+        
+    # 2. Setup 1 / (d0 - M)
+    d0 = R_base(d0_val)
+    M = d0 - den
+    M_over_d0 = M / d0
+    
+    inv_den = R_base(0)
+    term = R_base(1) / d0
+    
+    # 3. Accumulate the geometric series
+    for _ in range(max_degree):
+        inv_den += term
+        term = truncate_base_poly(term * M_over_d0, params, max_degree)
+        
+    # Multiply the numerator by the expanded denominator and truncate one last time
+    return truncate_base_poly(num * inv_den, params, max_degree)
+
+def truncate_coeffs(f, params, degree):
+    """Truncates the fractional coefficients of a polynomial f."""
+    res = 0
+    for c, v in f:
+        c_trunc = expand_fraction(c, params, degree)
+        res += c_trunc * v
+    return res
+
+####### END
+
+def mod_by_P(f, P):
+    Quo = P.parent().quotient(P)
+    return Quo(f).lift()
+
+def mod_truncate(f, P, params, degree):
+    return truncate_coeffs(mod_by_P(f, P), params, degree)
+
+def inv(f, P):
+    """
+    Find inverse of f modulo P using extended Euclidean algorithm.
+    Returns g such that f*g = 1 mod P.
+    """
+
+    Quo = P.parent().quotient(P)
+    return Quo(f).inverse().lift()
 
 def specialize_system(f_list, param_vars, param_point):
     """
@@ -59,17 +126,13 @@ def primitive_element(x_vars, coeffs=None):
     return T_expr, coeffs
 
 def to_shape_lemma(P, Qs, u_):
-    R = u_.parent()
-    Quo = R.quotient_ring(Ideal(P))
     Pd = P.derivative(u_)
-    Pd_inv = Quo(Pd).inverse()
-    return [Quo(Q*Pd_inv).lift() for Q in Qs]
+    Pd_inv = xgcd(Pd, P)[1]
+    return [Q*Pd_inv % P for Q in Qs]
 
 def to_kronecker(P, Qs, params, u_, prec):
-    R = u_.parent()
-    Quo = R.quotient_ring(Ideal(params)**(prec) + Ideal(P))
     Pd = P.derivative(u_)
-    return [Quo(Q*Pd).lift() for Q in Qs]
+    return [mod_truncate(Q*Pd, P, params, prec) for Q in Qs]
 
 def apply_ring_morphism(R, *args):
     res = []
@@ -133,38 +196,14 @@ def construct_rational(gamma, r, params, prec):
     p, q, s_new = R_poly(p), R_poly(q), R_poly(s_new.polynomial())
 
     # Sub back to original variables
-    """
     p, q, s_new = apply_ring_morphism(flatten_R_new, p, q, s_new)
-    p = Rs(p.subs({flatten_R_new(y): v - gamma for y, v, gamma in zip(ys, params[1:], gamma)} | {flatten_R_new(s_new): s}))
-    q = Rs(q.subs({flatten_R_new(y): v - gamma for y, v, gamma in zip(ys, params[1:], gamma)} | {flatten_R_new(s_new): s}))
-    #debug("q", q)
 
-    # Homogenize and specialize to s=1
-    #debug(q.parent())
-    #debug(params[0])
-    #debug(params[0].parent())
-    #debug(q.homogenize(params[0]))
-    p = p.homogenize(params[0])
-    q = q.homogenize(params[0])
-    #debug("hom p, q:", p, q)
-
-    #debug("r_final:", (p/q).subs({s:1}))
-    #rint("to_R:", to_R((p/q).subs({s:1})))
-    #debug()
-    rat = R_base.fraction_field()
-    return rat((p/q).subs({s:1}))"""
-    # Sub back to original variables using FractionField
-    p, q, s_new = apply_ring_morphism(flatten_R_new, p, q, s_new)
-    
-    # 1. Access the exact Fraction Field of your original Base Ring (QQ(c, d))
-    Frac_R = R_base.fraction_field()
-    
     # 2. Build the exact algebraic inverse map
     # s maps to c (params[0])
     # y_i maps to (v / c) - gamma
-    subs_dict = {flatten_R_new(s_new): Frac_R(params[0])}
+    subs_dict = {flatten_R_new(s_new): R_base(params[0])}
     for y, v, g in zip(ys, params[1:], gamma):
-        subs_dict[flatten_R_new(y)] = Frac_R(v) / Frac_R(params[0]) - Frac_R(g)
+        subs_dict[flatten_R_new(y)] = R_base(v) / R_base(params[0]) - R_base(g)
 
     # 3. Perform substitution directly. 
     # Because the values are in Frac_R, SageMath handles all division and clearing of denominators safely.
@@ -181,14 +220,13 @@ def rational_reconstruction(gamma, P, kronecker_param, params, prec):
 
     # Convert params to base ring
     R_base = params[0].parent()
-    rat = R_base.fraction_field()
 
     # Reconstruct coefficients of P as a polynomial in u_ with coefficients in params
     debug()
     debug("Reconstructing P")
     debug(P.parent())
     rat_P = sum(
-        [construct_rational(gamma, r, params, prec)*v.change_ring(rat) for r, v in P]
+        [construct_rational(gamma, r, params, prec)*v.change_ring(R_base) for r, v in P]
     )
     debug("RECON P:", P)
     debug()
@@ -197,7 +235,7 @@ def rational_reconstruction(gamma, P, kronecker_param, params, prec):
     debug("Reconstructing kronecker")
     debug(kronecker_param[0].parent())
     rat_kronecker = [
-        sum([construct_rational(gamma, r, params, prec)*v.change_ring(rat) for r, v in f])
+        sum([construct_rational(gamma, r, params, prec)*v.change_ring(R_base) for r, v in f])
         for f in kronecker_param
     ]
     debug()
@@ -207,7 +245,7 @@ def rational_reconstruction(gamma, P, kronecker_param, params, prec):
 def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
     # 1. Define the substitution X -> V(U)
     Tsubs = {v: w for v, w in zip(vs, shape_param)}
-    print("prec:", prec)
+    debug("prec:", prec)
 
     # sys = F in the algorithm by Schost
     T = [v - w for v, w in zip(vs, shape_param)] + [P]
@@ -217,6 +255,7 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
     # This ensures no 'x' or 'y' variables sneak into the matrix inverses.
     JacF = jacobian(sys, [*vs, u_]).subs(Tsubs)
     JacT = jacobian(T, [*vs, u_]).subs(Tsubs)
+    debug("JacF:", JacF)
 
     # 3. Invert JacF in the precision-k quotient ring (modulo P and params^prec)
     R = u_.parent()
@@ -225,72 +264,55 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
 
     debug("T:", T)
     debug("sys:", sys)
-    debug("JacF_det:", JacF.change_ring(Quo_k_P).determinant())
+    #debug("JacF_det:", JacF.change_ring(Quo_k_P).determinant())
 
-    Jac_Quo = JacF.change_ring(Quo_k_P)
-    
-    """
-    JacF_inv = JacF.change_ring(Quo_k_P).inverse().change_ring(Quo_k_P)
-    #JacF_inv = matrix(
-    #    matrix(
-    #
-    #    )
-    #)
-
-    # 4. Compute the iteration matrix M and lift it back to the base ring R
-    M = JacT.change_ring(Quo_k_P) * JacF_inv
-    M = matrix(
+    JacF_inv = JacF.inverse()
+    JacF_inv = matrix(
         [
-            [v.lift() for v in row]
-            for row in M
+            [f.numerator() * inv(f.denominator(), P) for f in row]
+            for row in JacF_inv
         ]
     )
-    """
+    debug("JacF_inv")
+    debug(JacF_inv)
+
+    # 4. Compute the iteration matrix M
+    M = JacT * JacF_inv
 
     # 5. Evaluate the defect (sys) at X = V(U) to retain terms up to O(params^{2*prec})
     sys_eval = vector([f.subs(Tsubs) for f in sys])
-    JacF_inv_times_sys = Jac_Quo.solve_right(sys_eval)
+    debug("eval:", sys_eval)
 
     # 6. Multiply M by the defect and reduce modulo P and params^{2*prec}
-    Quo_2k_P = R.quotient_ring(Ideal(params)**(2*prec) + Ideal(P))
     deltas = M * sys_eval
-    print("deltas original:", deltas)
-    deltas = [Quo_2k_P(d).lift() for d in deltas]
-    print("deltas1:", deltas)
-    deltas2 = [mod_by_P(truncate_coeffs(d, params, 2*prec), P) for d in deltas]
-    print("deltas2")
-    for d in deltas:
-        trunc = truncate_coeffs(d, params, 2*prec)
-        print("trunc:", trunc)
-        print("P:", P)
-        print(mod_by_P(trunc, P))
-        print()
-    print("deltas2:", deltas2)
-        
+    debug("deltas:", deltas)
+    deltas = [mod_truncate(d, P, params, 2*prec) for d in deltas]
+    debug("P:", P)
     debug("deltas:", deltas)
     
     # 7. Apply updates: V_new = V_old - delta_V, P_new = P_old + delta_P
-    # We use Quo_2k (without Ideal(P)) here so we don't accidentally reduce P down to 0!
-    Quo_2k = R.quotient_ring(Ideal(params)**(2*prec))
-    
-    #new_shape_param = [Quo_2k(w - delta).lift() for w, delta in zip(shape_param, deltas[:-1])]
     new_shape_param = [truncate_coeffs(w-delta, params, 2*prec) for w, delta in zip(shape_param, deltas[:-1])]
-    newP =  truncate_coeffs(P+deltas[-1], params, 2*prec) #Quo_2k(P + deltas[-1]).lift()
+    newP =  truncate_coeffs(P+deltas[-1], params, 2*prec)
+    debug("oldP", P)
+    debug("P_update", deltas[-1])
+    debug("test:", P+deltas[-1])
+    debug("newP", newP)
 
     return newP, new_shape_param
 
 def stop_criterion(F, P, params, kronecker_param, test_param, u_, vs):
+    R_base = params[0].parent()
     test_subs = {v:p for v, p in zip(params, test_param)}
     f_subs = {v:q for v, q in zip(vs, kronecker_param)}
 
     # Test 1: Check that no denominators vanish at test parameter
     for coeff in P.coefficients():
-        if coeff.denominator().subs(test_subs) == 0:
+        if R_base(coeff.denominator()).subs(test_subs) == 0:
             debug("Coefficient vanishes at test point", verbosity=10)
             return False
     for f in kronecker_param:
         for coeff in f.coefficients():
-            if coeff.denominator().subs(test_subs) == 0:
+            if R_base(coeff.denominator()).subs(test_subs) == 0:
                 debug("Coefficient vanishes at test point", verbosity=10)
                 return False
             
@@ -375,13 +397,14 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
     shape_param = to_shape_lemma(P, kronecker_param, u_)
 
     # Generate rings that will be used throughout
-    R_base = PolynomialRing(QQ, len(params), params)
+    R_base = PolynomialRing(QQ, len(params), params).fraction_field()
     params = [R_base(p) for p in params]
     R = PolynomialRing(R_base, vs + [u_])
     original_to_R = R_original.hom(
         list(R_base.gens()) + list(R.gens())[:-1]
     )
     F, vs = apply_ring_morphism(original_to_R, F, vs)
+
     u_to_R = u_.parent().hom([R.gens()[-1]])
     u_, P, kronecker_param, shape_param = apply_ring_morphism(
         u_to_R, u_, P, kronecker_param, shape_param
@@ -393,47 +416,19 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
     debug("shape:", shape_param, verbosity=10)
     debug(verbosity=10)
 
-    """
-    # Convert flattened ring to block ordering with parameters last
-    all_vars = [str(v) for v in vs] + [str(u_)] + [str(p) for p in params]
-    block_order = TermOrder('degrevlex', len(vs) + 1) + TermOrder('degrevlex', len(params))
-    R_flat_ordered = PolynomialRing(QQ, names=all_vars, order=block_order)
-    flat_vsu, flat_params = list(R_flat_ordered.gens())[:-num_params], list(R_flat_ordered.gens())[-num_params:]
-
-    flatten_R = R.flattening_morphism()
-    flatten_R_ordered = flatten_R.codomain().hom(flat_params + flat_vsu)
-    unflatten_R = flatten_R_ordered.codomain().hom(list(R.gens())+list(R_base.gens()))
-    #flatten_R = R.flattening_morphism()
-    #unflatten_R = flatten_R.inverse()
-
     D = max(f.degree() for f in F)
     n = len(F)
-    MAX_ITER = min(int(log(2*D**n+1, 2))+1, 4) # TODO - capping precision until efficiency implementations
-
-    # all elements should be flattened going into the loop
-    F, P, shape_param, kronecker_param, vs, flat_params, u_, linear_form = apply_ring_morphism(
-        flatten_R, F, P, shape_param, kronecker_param, vs, params, u_, linear_form
-    )
-    F, P, shape_param, kronecker_param, vs, flat_params, u_, linear_form = apply_ring_morphism(
-        flatten_R_ordered, F, P, shape_param, kronecker_param, vs, flat_params, u_, linear_form
-    )
-    """
+    MAX_ITER = int(log(2*D**n+1, 2))+1
 
     prec = 1
     for kappa in range(MAX_ITER):
         # Convert shape param to kronecker
         debug("ITER:", kappa, verbosity=10)
-        kronecker_param = to_kronecker(P, shape_param, vs, u_, prec)
+        kronecker_param = to_kronecker(P, shape_param, params, u_, prec)
         debug("PRE-KRONECKER", verbosity=10)
         debug(P, verbosity=10)
         debug(kronecker_param, verbosity=10)
         debug(verbosity=10)
-
-        """
-        F, P, kronecker_param, vs, u_, linear_form = apply_ring_morphism(
-            unflatten_R, F, P, kronecker_param, vs, u_, linear_form
-        )
-        """
         
         if prec >= 2:
             # Reconstruct rational coefficients and check if done
@@ -459,19 +454,9 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
             else:
                 debug("CRITERION FAILED", verbosity=10)
             debug(verbosity=10)
-        
-
-        """
-        F, P, kronecker_param, vs, u_, linear_form = apply_ring_morphism(
-            flatten_R, F, P, kronecker_param, vs, u_, linear_form
-        )
-        F, P, kronecker_param, vs, u_, linear_form = apply_ring_morphism(
-            flatten_R_ordered, F, P, kronecker_param, vs, u_, linear_form
-        )
-        """
 
         # Lift shape param to higher order
-        P, shape_param = newton_lift(F, P, shape_param, vs, u_, flat_params, linear_form, prec)
+        P, shape_param = newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec)
         debug("LIFTED", verbosity=10)
         debug(P, verbosity=10)
         debug(shape_param, verbosity=10)
