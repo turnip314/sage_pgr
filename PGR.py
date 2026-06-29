@@ -1,7 +1,7 @@
 from sage.all import QQ, QQbar, log, Ideal, PolynomialRing, xgcd, FractionField, matrix, SR, vector, PowerSeriesRing, TermOrder
 
 def debug(*args, verbosity=1):
-    threshold = 9
+    threshold = 11
     if verbosity > threshold:
         print(*args)
 
@@ -12,15 +12,6 @@ def jacobian(sys, vs):
                 for f in sys
             ]
         )
-
-def truncate_coeffs(f, params, degree):
-    R_base_poly = params[0].numerator().parent()
-    Quo_r = R_base_poly.quotient_ring(Ideal([R_base_poly(v) for v in params])**degree)
-    return sum(
-        [(Quo_r(c.numerator())*Quo_r(c.denominator()).inverse()).lift()*v for c, v in f]
-    )
-
-######## IMPLEMENTATION BY GEMINI - FOR TESTING
 
 def truncate_base_poly(poly, params, max_degree):
     """Safely drops terms from a base polynomial exceeding max_degree."""
@@ -72,8 +63,6 @@ def truncate_coeffs(f, params, degree):
         c_trunc = expand_fraction(c, params, degree)
         res += c_trunc * v
     return res
-
-####### END
 
 def mod_by_P(f, P):
     Quo = P.parent().quotient(P)
@@ -146,8 +135,10 @@ def apply_ring_morphism(R, *args):
     return tuple(res)
 
 def construct_rational(gamma, r, params, prec):
-    debug("r:", r)
-    #debug(params)
+    r"""
+    Construct rational approximation for power series `r` in variables
+    `params` up to specified precision
+    """
     R_base = r.parent()
 
     s = SR.var('s')
@@ -155,11 +146,8 @@ def construct_rational(gamma, r, params, prec):
 
     Rs = PolynomialRing(QQ, len(params)+1, [*params, s])
     R_base_to_Rs = R_base.hom(list(Rs.gens())[:-1])
-    #debug("params", params)
-    #debug(R_base_to_Rs)
-    debug(R_base_to_Rs(params[0]))
+
     r, params = apply_ring_morphism(R_base_to_Rs, r, params)
-    #debug("params", params)
     r_tilde = Rs(r.subs({v: v*s for v in params[1:]} | {params[0]: s}))
     s = Rs.gens()[-1]
 
@@ -180,13 +168,6 @@ def construct_rational(gamma, r, params, prec):
     p, q = R_new(p), R_new(q)
     p = p.truncate(prec)
     q = q.truncate(prec)
-    #debug("pade p:", p)
-    #debug("pade q:", q)
-
-    # Divide p and q by degree 0 terms
-    
-    #p = (p/q.subs({s_new:0})).truncate(prec)
-    #q = (q/q.subs({s_new:0})).truncate(prec)
 
     # Truncate coefficients by prec and convert everything back to polynomial
     p = R_poly(p)
@@ -212,11 +193,12 @@ def construct_rational(gamma, r, params, prec):
     return r_final
 
 def rational_reconstruction(gamma, P, kronecker_param, params, prec):
+    r"""
+    Construct rational approximation for coefficients of `P` and `kronecker_param`
+    as rational functions in `params` up to specified precision
+    """
+
     debug("RECON START")
-    #for r, v in P:
-    #    debug(r, v)
-    #    debug(construct_rational(gamma, r, params, u_, prec))
-    #    debug("--")
 
     # Convert params to base ring
     R_base = params[0].parent()
@@ -243,6 +225,9 @@ def rational_reconstruction(gamma, P, kronecker_param, params, prec):
     return rat_P, rat_kronecker
 
 def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
+    r"""
+    Lift precision of power series approximation for shape parametrization of `F`
+    """
     # 1. Define the substitution X -> V(U)
     Tsubs = {v: w for v, w in zip(vs, shape_param)}
     debug("prec:", prec)
@@ -260,24 +245,9 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
     # 3. Invert JacF in the precision-k quotient ring (modulo P and params^prec)
     R = u_.parent()
     R_base = R.base_ring()
-    #Quo_k_P = R.quotient_ring(Ideal(params)**prec + Ideal(P))
 
     debug("T:", T)
     debug("sys:", sys)
-    #debug("JacF_det:", JacF.change_ring(Quo_k_P).determinant())
-
-    #JacF_inv = JacF.inverse()
-    #JacF_inv = matrix(
-    #    [
-    #        [f.numerator() * inv(f.denominator(), P) for f in row]
-    #        for row in JacF_inv
-    #    ]
-    #)
-    #debug("JacF_inv")
-    #debug(JacF_inv)
-
-    # 4. Compute the iteration matrix M
-    #M = JacT * JacF_inv
 
     # 5. Evaluate the defect (sys) at X = V(U) to retain terms up to O(params^{2*prec})
     sys_eval = vector([f.subs(Tsubs) for f in sys])
@@ -305,6 +275,9 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
     return newP, new_shape_param
 
 def stop_criterion(F, P, params, kronecker_param, test_param, u_, vs):
+    r"""
+    
+    """
     R_base = params[0].parent()
     test_subs = {v:p for v, p in zip(params, test_param)}
     f_subs = {v:q for v, q in zip(vs, kronecker_param)}
@@ -373,6 +346,10 @@ def stop_criterion(F, P, params, kronecker_param, test_param, u_, vs):
     return True
 
 def parametric_geometric_resolution(F, num_params, param_point=None, test_param=None, gamma=None):
+    r"""
+    Comput a parametric geometric resolution for system of polynomials `F = (f_1,\ldots,f_n)` in
+    `\mathbb{Q}[p_1,\ldots,p_m,x_1,\ldots,x_n]` where ``m = num_params``.
+    """
     # Separate input by parameters and variables
     R_original = F[0].parent()
     params = list(R_original.gens())[:num_params]
@@ -429,7 +406,7 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
         # Convert shape param to kronecker
         debug("ITER:", kappa, verbosity=10)
         kronecker_param = to_kronecker(P, shape_param, params, u_, prec)
-        debug("PRE-KRONECKER", verbosity=10)
+        debug("TO KRONECKER, verbosity=10)
         debug(P, verbosity=10)
         debug(kronecker_param, verbosity=10)
         debug(verbosity=10)
@@ -437,7 +414,7 @@ def parametric_geometric_resolution(F, num_params, param_point=None, test_param=
         if prec >= 2:
             # Reconstruct rational coefficients and check if done
             rational_P, rational_params = rational_reconstruction(gamma, P, kronecker_param, params, prec//2)
-            debug("KRONECKER:", verbosity=10)
+            debug("RECONSTRUCTED KRONECKER:", verbosity=10)
             debug(rational_P, verbosity=10)
             debug(rational_params, verbosity=10)
             debug(verbosity=10)
