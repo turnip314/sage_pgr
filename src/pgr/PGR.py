@@ -1,7 +1,7 @@
 from sage.all import QQ, QQbar, log, Ideal, PolynomialRing, xgcd, FractionField, matrix, SR, vector, PowerSeriesRing, TermOrder
 
 def debug(*args, verbosity=1):
-    threshold = 11
+    threshold = 9
     if verbosity > threshold:
         print(*args)
 
