@@ -1,7 +1,7 @@
 from sage.all import QQ, QQbar, log, Ideal, PolynomialRing, xgcd, FractionField, matrix, SR, vector, PowerSeriesRing, TermOrder
 
 def debug(*args, verbosity=1):
-    threshold = 9
+    threshold = 11
     if verbosity > threshold:
         print(*args)
 
@@ -251,14 +251,15 @@ def newton_lift(F, P, shape_param, vs, u_, params, linear_form, prec):
 
     # 5. Evaluate the defect (sys) at X = V(U) to retain terms up to O(params^{2*prec})
     sys_eval = vector([f.subs(Tsubs) for f in sys])
-    JacF_inv_times_sys_eval = JacF.solve_right(sys_eval)
-    JacF_inv_times_sys_eval = vector(
-            [f.numerator() * inv(f.denominator(), P) for f in JacF_inv_times_sys_eval]
-    )
     debug("eval:", sys_eval)
 
+    JacF_adj = JacF.adjugate()
+    JacF_det = mod_truncate(JacF.determinant(), P, params, 2*prec)
+    JacF_inv = truncate_coeffs(inv(JacF_det, P), params, 2*prec) * JacF_adj
+    M = JacT * JacF_inv
+
     # 6. Multiply M by the defect and reduce modulo P and params^{2*prec}
-    deltas = JacT * JacF_inv_times_sys_eval #M * sys_eval
+    deltas = M * sys_eval #JacT * JacF_inv_times_sys_eval #M * sys_eval
     debug("deltas:", deltas)
     deltas = [mod_truncate(d, P, params, 2*prec) for d in deltas]
     debug("P:", P)
